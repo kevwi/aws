@@ -183,3 +183,143 @@ def run_redshift_query(
         return rows
 
     return "Query executed successfully (no result set)"
+
+import boto3
+import pandas as pd
+from io import BytesIO
+import time
+from botocore.exceptions import ClientError
+
+def s3_parquet_copy_and_pipecsv(
+    source_bucket: str,
+    source_key: str,
+    target_bucket: str = None,
+    prefix_out: str = "converted/",
+    region: str = None,
+    verify_ssl: bool = False,
+    max_retries: int = 3,
+    retry_backoff_seconds: float = 1.0
+):
+    """
+    1) Copies parquet unchanged from source_key -> <prefix_out>/<filename>_copy.parquet
+    2) Reads source parquet into memory
+    3) Writes pipe-delimited CSV to <prefix_out>/<filename>.csv
+
+    NOTE: verify_ssl=False disables SSL cert validation (for Zscaler). Use only for testing.
+    """
+
+    target_bucket = target_bucket or source_bucket
+
+    session = boto3.session.Session()
+    s3 = session.client("s3", region_name=region, verify=verify_ssl)
+
+    base_name = source_key.split("/")[-1]
+    if base_name.lower().endswith(".parquet"):
+        copy_key = f"{prefix_out}{base_name[:-8]}_copy.parquet"
+        csv_key = f"{prefix_out}{base_name[:-8]}.csv"
+    else:
+        copy_key = f"{prefix_out}{base_name}_copy.parquet"
+        csv_key = f"{prefix_out}{base_name}.csv"
+
+    # ---------- 1) COPY OBJECT ----------
+    last_exc = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            print(f"[copy] attempt {attempt}: copying s3://{source_bucket}/{source_key} -> s3://{target_bucket}/{copy_key}")
+            s3.copy_object(
+                Bucket=target_bucket,
+                Key=copy_key,
+                CopySource={"Bucket": source_bucket, "Key": source_key},
+            )
+            print(f"[copy] success: s3://{target_bucket}/{copy_key}")
+            last_exc = None
+            break
+        except ClientError as e:
+            last_exc = e
+            print(f"[copy] attempt {attempt} failed: {e}")
+            time.sleep(retry_backoff_seconds * attempt)
+    if last_exc:
+        raise last_exc
+
+    # ---------- 2) DOWNLOAD PARQUET ----------
+    last_exc = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            print(f"[download] attempt {attempt}: downloading s3://{source_bucket}/{source_key}")
+            obj = s3.get_object(Bucket=source_bucket, Key=source_key)
+            parquet_bytes = obj["Body"].read()
+            print("[download] success")
+            last_exc = None
+            break
+        except ClientError as e:
+            last_exc = e
+            print(f"[download] attempt {attempt} failed: {e}")
+            time.sleep(retry_backoff_seconds * attempt)
+    if last_exc:
+        raise last_exc
+
+    # ---------- 3) READ PARQUET INTO PANDAS ----------
+    try:
+        df = pd.read_parquet(BytesIO(parquet_bytes))
+        print(f"[read] loaded dataframe: rows={df.shape[0]} cols={df.shape[1]}")
+    except Exception as e:
+        raise RuntimeError(f"Failed to read parquet: {e}")
+
+    # ---------- 4) WRITE PIPE CSV TO S3 ----------
+    csv_buffer = BytesIO()
+    try:
+        df.to_csv(csv_buffer, sep="|", index=False)
+        csv_body = csv_buffer.getvalue()
+    except Exception as e:
+        raise RuntimeError(f"Failed to convert to CSV: {e}")
+
+    last_exc = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            print(f"[upload] attempt {attempt}: uploading CSV to s3://{target_bucket}/{csv_key}")
+            s3.put_object(
+                Bucket=target_bucket,
+                Key=csv_key,
+                Body=csv_body,
+                ContentType="text/csv"
+            )
+            print(f"[upload] success: s3://{target_bucket}/{csv_key}")
+            last_exc = None
+            break
+        except ClientError as e:
+            last_exc = e
+            print(f"[upload] attempt {attempt} failed: {e}")
+            time.sleep(retry_backoff_seconds * attempt)
+    if last_exc:
+        raise last_exc
+
+    return {
+        "copied_parquet": f"s3://{target_bucket}/{copy_key}",
+        "pipe_csv": f"s3://{target_bucket}/{csv_key}",
+        "rows": int(df.shape[0]),
+        "cols": int(df.shape[1])
+    }
+
+
+"""
+If this works:
+
+Layer	Proven
+IAM credentials	✔
+S3 read	✔
+S3 write	✔
+Python environment	✔
+Parquet compatibility	✔
+Data usable for COPY	✔
+"""
+
+if __name__ == "__main__":
+    res = s3_parquet_copy_and_pipecsv(
+        source_bucket="my-bucket",
+        source_key="incoming/sample.parquet",
+        target_bucket="my-bucket",
+        prefix_out="testing/",
+        region="us-west-2",
+        verify_ssl=False
+    )
+    print("Result:", res)
