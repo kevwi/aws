@@ -120,6 +120,7 @@ print(rows)
 
 import boto3
 import time
+from botocore.config import Config
 
 
 def run_redshift_query(
@@ -131,15 +132,18 @@ def run_redshift_query(
 ):
     """
     Execute a query against Redshift Serverless and return results.
-
-    Requires:
-      - Secret in Secrets Manager containing username/password
-      - IAM permissions for redshift-data + secretsmanager
+    SSL verification disabled (for Zscaler environments).
     """
 
-    client = boto3.client("redshift-data", region_name=region)
+    # Disable SSL validation
+    session = boto3.session.Session()
+    client = session.client(
+        "redshift-data",
+        region_name=region,
+        verify=False,  # <---- the magic line
+        config=Config(retries={"max_attempts": 3})
+    )
 
-    # Submit query
     response = client.execute_statement(
         WorkgroupName=workgroup_name,
         Database=database,
@@ -163,12 +167,12 @@ def run_redshift_query(
 
         time.sleep(1)
 
-    # Fetch results (if SELECT)
+    # Fetch results
     if desc.get("HasResultSet", False):
         results = client.get_statement_result(Id=statement_id)
 
-        rows = []
         columns = [col["name"] for col in results["ColumnMetadata"]]
+        rows = []
 
         for record in results["Records"]:
             row = []
@@ -179,13 +183,3 @@ def run_redshift_query(
         return rows
 
     return "Query executed successfully (no result set)"
-
-if __name__ == "__main__":
-    rows = run_redshift_query(
-        sql="SELECT 'high cortisol, low IQ hello world' AS message;",
-        workgroup_name="YOUR_WORKGROUP",
-        database="YOUR_DB",
-        secret_arn="YOUR_SECRET_ARN"
-    )
-
-    print(rows)
