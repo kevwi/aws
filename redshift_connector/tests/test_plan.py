@@ -105,3 +105,87 @@ def test_copy_parquet_to_redshift_live(
     assert rows and len(rows) > 0, "Count query returned no rows"
     cnt = int(list(rows[0].values())[0])
     assert cnt > 0, f"Expected >0 rows after COPY, got {cnt}"
+
+"""
+rows = execute_sql_redshift_serverless(
+    workgroup="my-wg",
+    database="analytics",
+    sql="SELECT COUNT(*) AS cnt FROM public.events;",
+    secret_arn="arn:aws:secretsmanager:us-west-2:123456789012:secret:my-redshift-secret",
+    db_user="etl_user",
+    region="us-west-2",
+)
+print(rows)
+"""
+
+import boto3
+import time
+
+
+def run_redshift_query(
+    sql: str,
+    workgroup_name: str,
+    database: str,
+    secret_arn: str,
+    region: str = "us-west-2"
+):
+    """
+    Execute a query against Redshift Serverless and return results.
+
+    Requires:
+      - Secret in Secrets Manager containing username/password
+      - IAM permissions for redshift-data + secretsmanager
+    """
+
+    client = boto3.client("redshift-data", region_name=region)
+
+    # Submit query
+    response = client.execute_statement(
+        WorkgroupName=workgroup_name,
+        Database=database,
+        SecretArn=secret_arn,
+        Sql=sql
+    )
+
+    statement_id = response["Id"]
+    print("Statement ID:", statement_id)
+
+    # Wait for completion
+    while True:
+        desc = client.describe_statement(Id=statement_id)
+        status = desc["Status"]
+
+        if status in ["FAILED", "ABORTED"]:
+            raise Exception(desc.get("Error", "Query failed"))
+
+        if status == "FINISHED":
+            break
+
+        time.sleep(1)
+
+    # Fetch results (if SELECT)
+    if desc.get("HasResultSet", False):
+        results = client.get_statement_result(Id=statement_id)
+
+        rows = []
+        columns = [col["name"] for col in results["ColumnMetadata"]]
+
+        for record in results["Records"]:
+            row = []
+            for field in record:
+                row.append(list(field.values())[0] if field else None)
+            rows.append(dict(zip(columns, row)))
+
+        return rows
+
+    return "Query executed successfully (no result set)"
+
+if __name__ == "__main__":
+    rows = run_redshift_query(
+        sql="SELECT 'high cortisol, low IQ hello world' AS message;",
+        workgroup_name="YOUR_WORKGROUP",
+        database="YOUR_DB",
+        secret_arn="YOUR_SECRET_ARN"
+    )
+
+    print(rows)
