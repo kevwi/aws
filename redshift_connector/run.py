@@ -20,3 +20,15 @@ def run_idempotent_copy(s3_client: Any, client: Any, schema: str, table: str,
             if not check(count):
                 write.run_statement(client,f"DROP TABLE IF EXISTS {schema}.tmp_cleanup;",database,db_user)
                 raise write.RedshiftError("sanity check failed")
+
+from redshift-connector.client_factory import get_redshift_data_client
+from redshift-connector.executor import run_statement
+
+client = get_redshift_data_client()
+
+run_statement(
+    client=client,
+    sql="SELECT 1",
+    database="analytics",
+    db_user="etl_user"
+).executor import run_statement
