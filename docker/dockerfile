@@ -1,20 +1,78 @@
-# Dockerfile.clone.private
-# syntax=docker/dockerfile:1.5
-FROM python:3.12-slim
+# Dockerfile
+# Multi-stage (optional) to build wheels for faster installs / smaller final image
+FROM python:3.12-slim AS builder
 
-ENV DEBIAN_FRONTEND=noninteractive PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
 
-RUN apt-get update && apt-get install -y --no-install-recommends git build-essential ca-certificates \
+# Install build deps (only in builder)
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends build-essential gcc git ca-certificates \
  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+
+# ---- Copy dependency manifest first for cache-friendly installs ----
+# If you use requirements.txt:
+COPY ./requirements.txt ./requirements.txt
+
+# If you use pyproject.toml / poetry:
+# COPY ./pyproject.toml ./poetry.lock* ./
+
+# Create virtualenv in builder (optional) or install wheels
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install pip first and upgrade pip/setuptools/wheel
+RUN pip install --upgrade pip setuptools wheel
+
+# Install dependencies into the venv (builder)
+# For requirements.txt:
+RUN pip wheel --wheel-dir /wheels -r requirements.txt
+
+# For Poetry (uncomment if using):
+# RUN pip install poetry && poetry export -f requirements.txt --without-hashes -o requirements-exported.txt
+# RUN pip wheel --wheel-dir /wheels -r requirements-exported.txt
+
+# ---- Final runtime image ----
+FROM python:3.12-slim AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/opt/venv/bin:$PATH"
+
+# Create non-root user
+RUN groupadd -r app && useradd -r -g app -m -d /home/app app
 
 WORKDIR /app
 
-# read token from secret at build time, clone private repo
-# NOTE: secret is NOT persisted into image layers
-RUN --mount=type=secret,id=github_token \
-    GITHUB_TOKEN=$(cat /run/secrets/github_token) && \
-    git clone https://${GITHUB_TOKEN}@github.com/OWNER/PRIVATE_REPO.git .
+# Install runtime OS deps (minimal)
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy venv from builder (or install wheels into venv)
+COPY --from=builder /opt/venv /opt/venv
+# Alternatively, copy wheels and install:
+# COPY --from=builder /wheels /wheels
+# RUN python -m venv /opt/venv && pip install /wheels/*
 
+# Copy application source
+COPY . .
+
+# Ensure ownership and use non-root user
+RUN chown -R app:app /app
+USER app
+
+# Example: expose port if your app serves HTTP
+# EXPOSE 8000
+
+# Healthcheck (optional)
+# HEALTHCHECK --interval=30s --timeout=3s \
+#   CMD curl -f http://localhost:8000/health || exit 1
+
+# Default command — change to match your app (uvicorn, flask, etc.)
 CMD ["python", "main.py"]
