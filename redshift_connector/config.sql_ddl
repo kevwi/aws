@@ -1,0 +1,33 @@
+CREATE TABLE IF NOT EXISTS config_lookup (
+    id        INTEGER IDENTITY(1,1) NOT NULL,
+    domain    VARCHAR(255) NOT NULL,
+    key1      VARCHAR(50)  NOT NULL,
+    key2      VARCHAR(50),
+    key3      VARCHAR(50),
+    value1    VARCHAR(255) NOT NULL,
+    value2    VARCHAR(255),
+    value3    VARCHAR(255),
+    disabled  BOOLEAN      NOT NULL DEFAULT FALSE,
+    modified  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+DISTSTYLE KEY
+DISTKEY (domain)
+SORTKEY (domain, key1, key2, key3, modified);
+
+ALTER TABLE config_lookup ADD PRIMARY KEY (id);
+
+CREATE TABLE IF NOT EXISTS pipe_log (
+    id           BIGINT IDENTITY(1,1) NOT NULL,
+    jobid        INTEGER              NOT NULL,
+    location     VARCHAR(2000)        NOT NULL,
+    app_code     SMALLINT             NOT NULL,
+    status_code  SMALLINT             NOT NULL,
+    metal_code   SMALLINT             NOT NULL,
+    created      TIMESTAMP            NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+DISTSTYLE KEY
+DISTKEY (jobid)
+SORTKEY (jobid, created);
+
+ALTER TABLE pipe_log ADD PRIMARY KEY (id);
