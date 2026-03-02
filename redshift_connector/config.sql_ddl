@@ -477,3 +477,175 @@ EXCEPTION
     RAISE;
 END;
 $$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE PROCEDURE sp_export_errata_and_log(
+  IN  p_domain        VARCHAR,    -- e.g., 'ffeo_task6b' (used for code namespace)
+  IN  p_schema        VARCHAR,    -- target table schema, e.g. 'analytics'
+  IN  p_table         VARCHAR,    -- target table name, e.g. 'silver_customers'
+  IN  p_where_clause  VARCHAR,    -- WHERE condition fragment without leading 'WHERE', e.g. "email IS NULL OR email = ''"
+  IN  p_error_reason  VARCHAR,    -- short text reason to attach to these rows
+  IN  p_app           VARCHAR,    -- process_name (for logging)
+  IN  p_status        VARCHAR,    -- status name (for logging)
+  IN  p_metal         VARCHAR,    -- metal name (for logging) — if 'bronze' we'll allocate jobid
+  IN  p_location      VARCHAR,    -- location string to store in errata & pipeline_log
+  IN  p_jobid_in      INTEGER,    -- caller-provided jobid (used if not bronze; may be NULL if bronze)
+  OUT o_errata_rows   INTEGER,    -- number of rows written to errata
+  OUT o_used_jobid    INTEGER,    -- jobid actually used (allocated or provided)
+  OUT o_log_id        BIGINT      -- inserted pipeline_log row id (from sp_log_pipeline_event_smart)
+)
+AS $$
+DECLARE
+  v_source_fq   TEXT := format('%I.%I', p_schema, p_table);
+  v_errata_fq   TEXT := format('%I.%I', p_schema, p_table || '_errata');
+  v_create_sql  TEXT;
+  v_insert_sql  TEXT;
+  v_check_sql   TEXT;
+  v_count       INTEGER;
+  v_jobid       INTEGER;
+  v_log_jobid   INTEGER;
+  v_log_rowid   BIGINT;
+BEGIN
+  ----------------------------------------------------------------
+  -- 0) Validate inputs quickly
+  ----------------------------------------------------------------
+  IF p_where_clause IS NULL OR trim(p_where_clause) = '' THEN
+    RAISE EXCEPTION 'p_where_clause must be provided (non-empty).';
+  END IF;
+
+  IF p_schema IS NULL OR p_table IS NULL THEN
+    RAISE EXCEPTION 'p_schema and p_table must be provided.';
+  END IF;
+
+  ----------------------------------------------------------------
+  -- 1) Create errata table if missing:
+  --    same columns as source, no rows, then add metadata columns.
+  ----------------------------------------------------------------
+  -- Check existence of errata table
+  SELECT COUNT(*) INTO v_count
+  FROM pg_table_def
+  WHERE schemaname = p_schema
+    AND tablename = (p_table || '_errata');
+
+  IF v_count = 0 THEN
+    -- create errata table with same columns as source (no data)
+    v_create_sql := format(
+      $$CREATE TABLE %s AS SELECT * FROM %s WHERE 1=0;$$,
+      v_errata_fq, v_source_fq
+    );
+    EXECUTE v_create_sql;
+
+    -- Add metadata columns to errata table
+    EXECUTE format($$ALTER TABLE %s ADD COLUMN error_reason VARCHAR(1024);$$, v_errata_fq);
+    EXECUTE format($$ALTER TABLE %s ADD COLUMN exported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;$$, v_errata_fq);
+    EXECUTE format($$ALTER TABLE %s ADD COLUMN pipeline_jobid INTEGER;$$, v_errata_fq);
+    EXECUTE format($$ALTER TABLE %s ADD COLUMN source_location VARCHAR(2000);$$, v_errata_fq);
+
+    -- Optionally: add a sort/dist strategy? Keep default; let user tune later.
+  END IF;
+
+  ----------------------------------------------------------------
+  -- 2) Choose / allocate jobid
+  ----------------------------------------------------------------
+  IF lower(coalesce(p_metal, '')) = 'bronze' THEN
+    -- allocate a fresh jobid and insert audit row via sp_alloc_jobid_pipeline
+    CALL sp_alloc_jobid_pipeline(v_jobid);
+  ELSE
+    IF p_jobid_in IS NULL THEN
+      RAISE EXCEPTION 'Non-bronze export must supply p_jobid_in';
+    END IF;
+    v_jobid := p_jobid_in;
+  END IF;
+  o_used_jobid := v_jobid;
+
+  ----------------------------------------------------------------
+  -- 3) Insert failed rows into errata
+  --    Use: INSERT INTO <schema>.<table>_errata SELECT t.*, <reason>, current_timestamp, <jobid>, <location>
+  ----------------------------------------------------------------
+  -- Build the INSERT ... SELECT statement dynamically. We rely on the fact
+  -- the errata table has the same column ordering as source followed by
+  -- the four metadata columns we added in that order.
+  v_insert_sql := format($$INSERT INTO %s
+    SELECT t.*, %L AS error_reason, CURRENT_TIMESTAMP AS exported_at, %s AS pipeline_jobid, %L AS source_location
+    FROM %s t
+    WHERE %s;$$,
+    v_errata_fq,         -- target
+    p_error_reason,      -- error_reason literal
+    v_jobid,             -- pipeline_jobid numeric
+    p_location,          -- source_location literal
+    v_source_fq,         -- source table
+    p_where_clause       -- where condition fragment
+  );
+
+  EXECUTE v_insert_sql;
+
+  -- exact count of inserted rows
+  GET DIAGNOSTICS o_errata_rows = ROW_COUNT;
+  IF o_errata_rows IS NULL THEN
+    -- fallback count (slow but safe)
+    EXECUTE format('SELECT COUNT(*) FROM %s WHERE %s', v_source_fq, p_where_clause)
+    INTO o_errata_rows;
+  END IF;
+
+  ----------------------------------------------------------------
+  -- 4) Log the export action into pipeline_log using your smart logger
+  --    We call sp_log_pipeline_event_smart which returns the jobid used and log id.
+  ----------------------------------------------------------------
+  -- Call sp_log_pipeline_event_smart: it expects domain, app, status, metal, location, p_jobid_in (nullable)
+  CALL sp_log_pipeline_event_smart(
+    p_domain,
+    p_app,
+    p_status,
+    p_metal,
+    p_location,
+    v_jobid,
+    v_log_jobid,
+    v_log_rowid
+  );
+
+  -- return log id and jobid used
+  o_log_id := v_log_rowid;
+  o_used_jobid := v_jobid;
+
+  RETURN;
+
+EXCEPTION
+  WHEN OTHERS THEN
+    -- bubble up error with context
+    RAISE EXCEPTION 'sp_export_errata_and_log failed: % -- source=%s table=%s where=%s',
+      SQLERRM, p_schema, p_table, p_where_clause;
+END;
+$$ LANGUAGE plpgsql;
+
+
+CALL sp_export_errata_and_log(
+  'ffeo_task6b',                  -- domain (namespace for codes)
+  'analytics',                    -- schema
+  'silver_customers',             -- table
+  'email IS NULL OR email = ''''', -- where clause (note quoting)
+  'email missing in silver',      -- error reason
+  'ingest_customers',             -- app / process_name
+  'errata_exported',              -- status
+  'bronze',                       -- metal (allocates a jobid)
+  's3://bucket/silver/customers', -- location
+  NULL,                           -- p_jobid_in (ignored for bronze)
+  o_errata_rows,
+  o_used_jobid,
+  o_log_id
+);
+
+CALL sp_export_errata_and_log(
+  'ffeo_task6b',
+  'analytics',
+  'silver_customers',
+  'customer_age < 0',
+  'negative age',
+  'validation_task',
+  'errata_exported',
+  'silver',                     -- not bronze, so we must pass jobid
+  's3://bucket/silver/customers',
+  42,                            -- jobid from earlier bronze step
+  o_errata_rows,
+  o_used_jobid,
+  o_log_id
+);
+-- o_used_jobid == 42
