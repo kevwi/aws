@@ -29,9 +29,6 @@ RUN pip install --upgrade pip setuptools wheel
 # For requirements.txt:
 RUN pip wheel --wheel-dir /wheels -r requirements.txt
 
-# For Poetry (uncomment if using):
-# RUN pip install poetry && poetry export -f requirements.txt --without-hashes -o requirements-exported.txt
-# RUN pip wheel --wheel-dir /wheels -r requirements-exported.txt
 
 # ---- Final runtime image ----
 FROM python:3.12-slim AS runtime
