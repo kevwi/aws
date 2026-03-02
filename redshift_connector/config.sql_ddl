@@ -37,46 +37,47 @@ CREATE TABLE IF NOT EXISTS config_key_sequence (
     last_alloc INTEGER NOT NULL
 );
 
-CREATE OR REPLACE PROCEDURE sp_alloc_key1_via_sequence_upsert(
-    IN  p_domain  VARCHAR,
-    IN  p_value1  VARCHAR,
-    OUT o_key1    VARCHAR
+CREATE OR REPLACE PROCEDURE sp_alloc_jobid_pipeline(
+    OUT o_jobid INTEGER
 )
 AS $$
 DECLARE
-    v_next_key INTEGER;
+    v_next INTEGER;
 BEGIN
-    /*
-      Atomically initialize or increment the per-domain counter via MERGE.
-      Then read the new last_alloc, insert into config_lookup, and return the key.
-    */
-
-    -- Atomic upsert: initialize to 1 when missing; otherwise increment existing counter
+    -- Atomic init/increment for (pipeline, 'jobid')
     MERGE INTO config_key_sequence AS tgt
-    USING (SELECT p_domain AS domain) AS src
-    ON tgt.domain = src.domain
+    USING (
+      SELECT 'pipeline' AS domain, 'jobid' AS key1
+    ) AS src
+    ON tgt.domain = src.domain AND tgt.key1 = src.key1
     WHEN MATCHED THEN
       UPDATE SET last_alloc = tgt.last_alloc + 1
     WHEN NOT MATCHED THEN
-      INSERT (domain, last_alloc) VALUES (src.domain, 1);
+      INSERT (domain, key1, last_alloc) VALUES (src.domain, src.key1, 1);
 
-    -- Read the current last_alloc (the value we just set/incremented)
-    SELECT last_alloc INTO v_next_key
+    -- Read allocated value
+    SELECT last_alloc INTO v_next
     FROM config_key_sequence
-    WHERE domain = p_domain;
+    WHERE domain = 'pipeline' AND key1 = 'jobid';
 
-    IF v_next_key IS NULL THEN
-      RAISE EXCEPTION 'Allocation failed for domain: %', p_domain;
+    IF v_next IS NULL THEN
+      RAISE EXCEPTION 'Jobid allocation failed for pipeline';
     END IF;
 
-    -- Use the allocated integer as key1 (string form)
-    o_key1 := v_next_key::VARCHAR;
+    o_jobid := v_next;
 
-    -- Insert new row into config_lookup using the allocated key
+    -- Insert audit/config row into config_lookup with the allocated jobid in value1
     INSERT INTO config_lookup (
         domain, key1, key2, key3, value1, value2, value3, disabled, modified, created
     ) VALUES (
-        p_domain, o_key1, NULL, NULL, p_value1, NULL, NULL, FALSE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        'pipeline',            -- fixed domain
+        'jobid',               -- key1 is constant
+        NULL, NULL,
+        v_next::VARCHAR,       -- jobid stored as text in value1
+        NULL, NULL,
+        FALSE,
+        CURRENT_TIMESTAMP,
+        CURRENT_TIMESTAMP
     );
 
 END;
