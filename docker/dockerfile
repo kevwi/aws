@@ -18,9 +18,6 @@ WORKDIR /src
 # If you use requirements.txt:
 COPY ./requirements.txt ./requirements.txt
 
-# If you use pyproject.toml / poetry:
-# COPY ./pyproject.toml ./poetry.lock* ./
-
 # Create virtualenv in builder (optional) or install wheels
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
