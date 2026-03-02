@@ -157,3 +157,92 @@ BEGIN
 
 END;
 $$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE PROCEDURE sp_log_pipeline_event_smart(
+    IN  p_domain     VARCHAR,      -- namespace for codes (e.g. 'ffeo_task6b')
+    IN  p_app        VARCHAR,      -- process_name
+    IN  p_status     VARCHAR,      -- status name (e.g. 'success'|'failure')
+    IN  p_metal      VARCHAR,      -- metal name (e.g. 'bronze'|'silver'|'gold')
+    IN  p_location   VARCHAR,      -- location (S3 path, topic, etc.)
+    IN  p_jobid_in   INTEGER,      -- caller-supplied jobid (used unless bronze)
+    OUT o_jobid      INTEGER,      -- actual jobid used (newly allocated for bronze)
+    OUT o_log_id     BIGINT        -- id of inserted pipeline_log row
+)
+AS $$
+DECLARE
+  v_app_code    INTEGER;
+  v_metal_code  INTEGER;
+  v_status_code INTEGER;
+  v_chosen_jobid INTEGER;
+BEGIN
+  ----------------------------------------------------------------
+  -- 1) Resolve / allocate codes for app, metal, and status
+  --    (idempotent; returns existing code if present)
+  ----------------------------------------------------------------
+  v_app_code    := sp_alloc_context_code(p_domain, 'process_name', p_app);
+  v_metal_code  := sp_alloc_context_code(p_domain, 'metal_name',    p_metal);
+  v_status_code := sp_alloc_context_code(p_domain, 'status',        p_status);
+
+  ----------------------------------------------------------------
+  -- 2) Determine jobid: allocate if bronze, otherwise use caller jobid
+  ----------------------------------------------------------------
+  IF lower(COALESCE(p_metal,'')) = 'bronze' THEN
+      -- allocate a new jobid (this also inserts an audit row into config_lookup)
+      CALL sp_alloc_jobid_pipeline(v_chosen_jobid);
+  ELSE
+      -- use provided jobid. Defensive: require a non-null positive integer
+      IF p_jobid_in IS NULL THEN
+        RAISE EXCEPTION 'Non-bronze events must supply p_jobid_in';
+      END IF;
+      v_chosen_jobid := p_jobid_in;
+  END IF;
+
+  o_jobid := v_chosen_jobid;
+
+  ----------------------------------------------------------------
+  -- 3) Insert into pipeline_log and return the inserted id
+  ----------------------------------------------------------------
+  INSERT INTO pipeline_log (
+    jobid, location, app_code, status_code, metal_code, created
+  )
+  VALUES (
+    v_chosen_jobid,
+    p_location,
+    COALESCE(v_app_code, -1),     -- defensive default if something weird happened
+    COALESCE(v_status_code, -1),
+    COALESCE(v_metal_code, -1),
+    CURRENT_TIMESTAMP
+  );
+j
+  -- Read back the inserted surrogate id (most-recent row for this jobid)
+  SELECT id INTO o_log_id
+  FROM pipeline_log
+  WHERE jobid = v_chosen_jobid
+  ORDER BY created DESC, id DESC
+  LIMIT 1;
+
+END;
+$$ LANGUAGE plpgsql;
+
+-- caller passes a dummy jobid (can be NULL or any int), metal='bronze'
+CALL sp_log_pipeline_event_smart(
+  'ffeo_task6b',           -- p_domain (namespace for codes)
+  'my_worker_process',     -- p_app
+  'started',               -- p_status
+  'bronze',                -- p_metal -> triggers jobid allocation
+  's3://bucket/bronze/x',  -- p_location
+  NULL,                    -- p_jobid_in ignored for bronze
+  o_jobid, o_log_id
+);
+-- returns the newly allocated o_jobid and o_log_id
+
+CALL sp_log_pipeline_event_smart(
+  'ffeo_task6b',          -- domain
+  'my_worker_process',    -- app
+  'validated',            -- status
+  'silver',               -- metal (not bronze -> use provided jobid)
+  's3://bucket/silver/x', -- location
+  42,                     -- p_jobid_in (must be the jobid allocated earlier)
+  o_jobid, o_log_id
+);
+-- o_jobid == 42
