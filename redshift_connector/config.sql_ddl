@@ -111,3 +111,49 @@ CALL sp_ensure_codes_and_return(
 );
 
 SELECT sp_alloc_context_code('ffeo_task6b','status','failure') AS failure_code;
+
+CREATE OR REPLACE PROCEDURE sp_alloc_jobid_pipeline(
+    OUT o_jobid INTEGER
+)
+AS $$
+DECLARE
+    v_next INTEGER;
+BEGIN
+    -- Atomic init/increment for (pipeline, 'jobid') using the new config_context_sequence
+    MERGE INTO config_context_sequence AS tgt
+    USING (
+      SELECT 'pipeline' AS domain, 'jobid' AS context
+    ) AS src
+    ON tgt.domain = src.domain AND tgt.context = src.context
+    WHEN MATCHED THEN
+      UPDATE SET last_alloc = tgt.last_alloc + 1
+    WHEN NOT MATCHED THEN
+      INSERT (domain, context, last_alloc) VALUES (src.domain, src.context, 1);
+
+    -- Read allocated value
+    SELECT last_alloc INTO v_next
+    FROM config_context_sequence
+    WHERE domain = 'pipeline' AND context = 'jobid';
+
+    IF v_next IS NULL THEN
+      RAISE EXCEPTION 'Jobid allocation failed for pipeline';
+    END IF;
+
+    o_jobid := v_next;
+
+    -- Insert audit/config row into config_lookup with the allocated jobid in value1
+    INSERT INTO config_lookup (
+        domain, context, key2, key3, value1, value2, value3, disabled, modified, created
+    ) VALUES (
+        'pipeline',            -- fixed domain
+        'jobid',               -- context is constant
+        NULL, NULL,
+        v_next::VARCHAR,       -- jobid stored as text in value1
+        NULL, NULL,
+        FALSE,
+        CURRENT_TIMESTAMP,
+        CURRENT_TIMESTAMP
+    );
+
+END;
+$$ LANGUAGE plpgsql;
