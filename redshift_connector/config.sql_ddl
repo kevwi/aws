@@ -31,3 +31,8 @@ DISTKEY (jobid)
 SORTKEY (jobid, created);
 
 ALTER TABLE pipe_log ADD PRIMARY KEY (id);
+
+CREATE TABLE IF NOT EXISTS config_key_sequence (
+    domain     VARCHAR PRIMARY KEY,
+    last_alloc INTEGER NOT NULL
+);
