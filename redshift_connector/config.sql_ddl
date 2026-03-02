@@ -246,3 +246,89 @@ CALL sp_log_pipeline_event_smart(
   o_jobid, o_log_id
 );
 -- o_jobid == 42
+
+CREATE OR REPLACE FUNCTION get_config_by_domain(
+  p_domain VARCHAR,
+  p_include_disabled BOOLEAN DEFAULT FALSE
+)
+RETURNS TABLE (
+  id        INTEGER,
+  domain    VARCHAR,
+  context   VARCHAR,
+  key2      VARCHAR,
+  key3      VARCHAR,
+  value1    VARCHAR,
+  value2    VARCHAR,
+  value3    VARCHAR,
+  disabled  BOOLEAN,
+  modified  TIMESTAMP,
+  created   TIMESTAMP
+)
+AS $$
+BEGIN
+  RETURN QUERY
+  SELECT
+    id,
+    domain,
+    context,
+    key2,
+    key3,
+    value1,
+    value2,
+    value3,
+    disabled,
+    modified,
+    created
+  FROM config_lookup
+  WHERE domain = p_domain
+    AND (
+          p_include_disabled = TRUE
+          OR disabled = FALSE
+        )
+  ORDER BY context, value1, modified DESC, id DESC;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION get_config_by_domain_and_context(
+  p_domain  VARCHAR,
+  p_context VARCHAR,
+  p_include_disabled BOOLEAN DEFAULT FALSE
+)
+RETURNS TABLE (
+  id        INTEGER,
+  domain    VARCHAR,
+  context   VARCHAR,
+  key2      VARCHAR,
+  key3      VARCHAR,
+  value1    VARCHAR,
+  value2    VARCHAR,
+  value3    VARCHAR,
+  disabled  BOOLEAN,
+  modified  TIMESTAMP,
+  created   TIMESTAMP
+)
+AS $$
+BEGIN
+  RETURN QUERY
+  SELECT
+    id,
+    domain,
+    context,
+    key2,
+    key3,
+    value1,
+    value2,
+    value3,
+    disabled,
+    modified,
+    created
+  FROM config_lookup
+  WHERE domain = p_domain
+    AND context = p_context
+    AND (
+          p_include_disabled = TRUE
+          OR disabled = FALSE
+        )
+  ORDER BY value1, modified DESC, id DESC;
+END;
+$$ LANGUAGE plpgsql;
