@@ -332,3 +332,148 @@ BEGIN
   ORDER BY value1, modified DESC, id DESC;
 END;
 $$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE PROCEDURE sp_copy_upsert_config_lookup_from_s3_pipe_exact(
+  IN  p_s3_path            VARCHAR,
+  IN  p_iam_role_arn       VARCHAR,
+  IN  p_region             VARCHAR DEFAULT 'us-east-1',
+  OUT o_rows_loaded        INTEGER,
+  OUT o_existing_matches   INTEGER,
+  OUT o_rows_inserted      INTEGER,
+  OUT o_rows_updated       INTEGER
+)
+AS $$
+DECLARE
+  v_copy_sql TEXT;
+BEGIN
+  ------------------------------------------------------------------
+  -- 1) Raw staging table
+  ------------------------------------------------------------------
+  CREATE TEMP TABLE staging_config_lookup (
+    domain   VARCHAR(255),
+    context  VARCHAR(50),
+    key2     VARCHAR(50),
+    key3     VARCHAR(50),
+    value1   VARCHAR(255),
+    value2   VARCHAR(255),
+    value3   VARCHAR(255),
+    disabled BOOLEAN,
+    modified TIMESTAMP,
+    created  TIMESTAMP
+  );
+
+  ------------------------------------------------------------------
+  -- 2) COPY (pipe CSV)
+  ------------------------------------------------------------------
+  v_copy_sql := format($$
+    COPY %I
+    FROM %L
+    IAM_ROLE %L
+    REGION %L
+    DELIMITER '|'
+    CSV
+    IGNOREHEADER 1
+    REMOVEQUOTES
+    TIMEFORMAT 'auto'
+    EMPTYASNULL
+    BLANKSASNULL;
+  $$, 'staging_config_lookup', p_s3_path, p_iam_role_arn, p_region);
+
+  EXECUTE v_copy_sql;
+
+  GET DIAGNOSTICS o_rows_loaded = ROW_COUNT;
+  IF o_rows_loaded IS NULL OR o_rows_loaded = 0 THEN
+    SELECT COUNT(*) INTO o_rows_loaded FROM staging_config_lookup;
+  END IF;
+
+  ------------------------------------------------------------------
+  -- 3) Deduplicate staging
+  ------------------------------------------------------------------
+  CREATE TEMP TABLE staging_dedup AS
+  SELECT domain, context, key2, key3, value1, value2, value3, disabled, modified, created
+  FROM (
+    SELECT s.*,
+           ROW_NUMBER() OVER (
+             PARTITION BY domain, context, COALESCE(value1,'')
+             ORDER BY COALESCE(modified, created, GETDATE()) DESC
+           ) rn
+    FROM staging_config_lookup s
+  ) q
+  WHERE rn = 1;
+
+  ------------------------------------------------------------------
+  -- 4) Pre-merge metrics
+  ------------------------------------------------------------------
+  SELECT COUNT(*) INTO o_existing_matches
+  FROM staging_dedup sd
+  JOIN config_lookup t
+    ON t.domain = sd.domain
+   AND t.context = sd.context
+   AND COALESCE(t.value1,'') = COALESCE(sd.value1,'');
+
+  SELECT COUNT(*) INTO o_rows_updated
+  FROM staging_dedup sd
+  JOIN config_lookup t
+    ON t.domain = sd.domain
+   AND t.context = sd.context
+   AND COALESCE(t.value1,'') = COALESCE(sd.value1,'')
+  WHERE
+       COALESCE(t.value2,'') <> COALESCE(sd.value2,'')
+    OR COALESCE(t.value3,'') <> COALESCE(sd.value3,'')
+    OR COALESCE(t.disabled,FALSE) <> COALESCE(sd.disabled,FALSE);
+
+  SELECT COUNT(*) INTO o_rows_inserted
+  FROM staging_dedup sd
+  LEFT JOIN config_lookup t
+    ON t.domain = sd.domain
+   AND t.context = sd.context
+   AND COALESCE(t.value1,'') = COALESCE(sd.value1,'')
+  WHERE t.id IS NULL;
+
+  ------------------------------------------------------------------
+  -- 5) MERGE
+  ------------------------------------------------------------------
+  MERGE INTO config_lookup tgt
+  USING staging_dedup s
+  ON tgt.domain = s.domain
+     AND tgt.context = s.context
+     AND COALESCE(tgt.value1,'') = COALESCE(s.value1,'')
+  WHEN MATCHED THEN
+    UPDATE SET
+      value2   = COALESCE(s.value2, tgt.value2),
+      value3   = COALESCE(s.value3, tgt.value3),
+      disabled = COALESCE(s.disabled, tgt.disabled),
+      modified = COALESCE(s.modified, CURRENT_TIMESTAMP)
+  WHEN NOT MATCHED THEN
+    INSERT (domain, context, key2, key3, value1, value2, value3, disabled, modified, created)
+    VALUES (
+      s.domain,
+      s.context,
+      COALESCE(s.key2,'code'),
+      s.key3,
+      s.value1,
+      s.value2,
+      s.value3,
+      COALESCE(s.disabled,FALSE),
+      COALESCE(s.modified,CURRENT_TIMESTAMP),
+      COALESCE(s.created,CURRENT_TIMESTAMP)
+    );
+
+  ------------------------------------------------------------------
+  -- 6) CLEANUP (success path)
+  ------------------------------------------------------------------
+  DROP TABLE IF EXISTS staging_dedup;
+  DROP TABLE IF EXISTS staging_config_lookup;
+
+  RETURN;
+
+EXCEPTION
+  WHEN OTHERS THEN
+    ----------------------------------------------------------------
+    -- CLEANUP (failure path)
+    ----------------------------------------------------------------
+    DROP TABLE IF EXISTS staging_dedup;
+    DROP TABLE IF EXISTS staging_config_lookup;
+    RAISE;
+END;
+$$ LANGUAGE plpgsql;
