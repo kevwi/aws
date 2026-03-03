@@ -529,6 +529,59 @@ if __name__ == "__main__":
         print(str(e))
         sys.exit(2)
 
+def _wait_for_result(rsd, statement_id):
+    while True:
+        desc = rsd.describe_statement(Id=statement_id)
+        if desc["Status"] in ("FINISHED", "FAILED", "ABORTED"):
+            if desc["Status"] != "FINISHED":
+                raise RuntimeError(desc)
+            return
+        time.sleep(0.3)
+
+
+def alloc_jobid(cluster_id, database, db_user):
+    rsd = boto3.client("redshift-data")
+
+    resp = rsd.execute_statement(
+        ClusterIdentifier=cluster_id,
+        Database=database,
+        DbUser=db_user,
+        Sql="SELECT control.alloc_jobid_pipeline();"
+    )
+
+    _wait_for_result(rsd, resp["Id"])
+    result = rsd.get_statement_result(Id=resp["Id"])
+
+    return int(list(result["Records"][0][0].values())[0])
+
+
+def log_pipeline_event(cluster_id, database, db_user,
+                       domain, app, status, metal, location,
+                       jobid=None):
+
+    rsd = boto3.client("redshift-data")
+
+    jobid_sql = "NULL" if jobid is None else str(jobid)
+
+    sql = f"""
+    CALL control.sp_log_pipeline_event_smart(
+      '{domain}',
+      '{app}',
+      '{status}',
+      '{metal}',
+      '{location}',
+      {jobid_sql},
+      NULL,
+      NULL
+    );
+    """
+
+    rsd.execute_statement(
+        ClusterIdentifier=cluster_id,
+        Database=database,
+        DbUser=db_user,
+        Sql=sql,
+    )
 """
 bash:
 python config_publish_json.py publish \
