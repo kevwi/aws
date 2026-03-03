@@ -1,0 +1,148 @@
+{
+  "domains": {
+    "quality_rules": [
+      {
+        "key1": "quality",
+        "key2": "not_null",
+        "value1": "{\"severity\":\"error\"}",
+        "value2": "",
+        "value_long": "SELECT COUNT(*) AS fail_count FROM [schema].[table] WHERE [where] AND [column_name] IS NULL;"
+      },
+      {
+        "key1": "quality",
+        "key2": "not_blank",
+        "value1": "{\"severity\":\"error\"}",
+        "value2": "",
+        "value_long": "SELECT COUNT(*) AS fail_count FROM [schema].[table] WHERE [where] AND ([column_name] IS NULL OR TRIM([column_name]) = '');"
+      },
+      {
+        "key1": "quality",
+        "key2": "unique",
+        "value1": "{\"severity\":\"error\"}",
+        "value2": "",
+        "value_long": "SELECT COUNT(*) AS fail_count FROM (SELECT [column_name], COUNT(*) c FROM [schema].[table] WHERE [where] GROUP BY [column_name] HAVING COUNT(*) > 1) d;"
+      },
+      {
+        "key1": "quality",
+        "key2": "in_allowed_set",
+        "value1": "{\"severity\":\"error\",\"allowed_list\":\"'A','B','C'\"}",
+        "value2": "",
+        "value_long": "SELECT COUNT(*) AS fail_count FROM [schema].[table] WHERE [where] AND [column_name] IS NOT NULL AND [column_name] NOT IN ([allowed_list]);"
+      },
+      {
+        "key1": "quality",
+        "key2": "between_numeric",
+        "value1": "{\"severity\":\"error\",\"min\":\"0\",\"max\":\"120\"}",
+        "value2": "",
+        "value_long": "SELECT COUNT(*) AS fail_count FROM [schema].[table] WHERE [where] AND [column_name] IS NOT NULL AND ([column_name] < [min] OR [column_name] > [max]);"
+      },
+      {
+        "key1": "quality",
+        "key2": "regex_match",
+        "value1": "{\"severity\":\"warn\",\"pattern\":\"^[A-Z0-9]{10}$\"}",
+        "value2": "",
+        "value_long": "SELECT COUNT(*) AS fail_count FROM [schema].[table] WHERE [where] AND [column_name] IS NOT NULL AND [column_name] !~ '[pattern]';"
+      },
+      {
+        "key1": "quality",
+        "key2": "min_length",
+        "value1": "{\"severity\":\"warn\",\"min_len\":\"1\"}",
+        "value2": "",
+        "value_long": "SELECT COUNT(*) AS fail_count FROM [schema].[table] WHERE [where] AND [column_name] IS NOT NULL AND LEN([column_name]) < [min_len];"
+      },
+      {
+        "key1": "quality",
+        "key2": "max_length",
+        "value1": "{\"severity\":\"warn\",\"max_len\":\"255\"}",
+        "value2": "",
+        "value_long": "SELECT COUNT(*) AS fail_count FROM [schema].[table] WHERE [where] AND [column_name] IS NOT NULL AND LEN([column_name]) > [max_len];"
+      },
+      {
+        "key1": "quality",
+        "key2": "non_negative",
+        "value1": "{\"severity\":\"error\"}",
+        "value2": "",
+        "value_long": "SELECT COUNT(*) AS fail_count FROM [schema].[table] WHERE [where] AND [column_name] IS NOT NULL AND [column_name] < 0;"
+      },
+      {
+        "key1": "quality",
+        "key2": "referential_exists",
+        "value1": "{\"severity\":\"error\",\"ref_schema\":\"silver\",\"ref_table\":\"dim_member\",\"ref_column\":\"member_id\"}",
+        "value2": "",
+        "value_long": "SELECT COUNT(*) AS fail_count FROM [schema].[table] t LEFT JOIN [ref_schema].[ref_table] r ON t.[column_name] = r.[ref_column] WHERE [where] AND t.[column_name] IS NOT NULL AND r.[ref_column] IS NULL;"
+      }
+    ],
+    "quality_apply": [
+      {
+        "key1": "quality",
+        "key2": "members:member_id:unique",
+        "value1": "{\"schema\":\"silver\",\"where\":\"1=1\",\"severity\":\"error\"}",
+        "value2": "",
+        "value_long": ""
+      },
+      {
+        "key1": "quality",
+        "key2": "members:member_id:not_null",
+        "value1": "{\"schema\":\"silver\",\"where\":\"1=1\",\"severity\":\"error\"}",
+        "value2": "",
+        "value_long": ""
+      },
+      {
+        "key1": "quality",
+        "key2": "members:email:regex_match",
+        "value1": "{\"schema\":\"silver\",\"where\":\"1=1\",\"pattern\":\"^[^@]+@[^@]+\\\\.[^@]+$\",\"severity\":\"warn\"}",
+        "value2": "",
+        "value_long": ""
+      },
+      {
+        "key1": "quality",
+        "key2": "members:email:not_blank",
+        "value1": "{\"schema\":\"silver\",\"where\":\"status = 'active'\",\"severity\":\"warn\"}",
+        "value2": "",
+        "value_long": ""
+      },
+      {
+        "key1": "quality",
+        "key2": "claims:claim_id:unique",
+        "value1": "{\"schema\":\"silver\",\"where\":\"1=1\",\"severity\":\"error\"}",
+        "value2": "",
+        "value_long": ""
+      },
+      {
+        "key1": "quality",
+        "key2": "claims:member_id:referential_exists",
+        "value1": "{\"schema\":\"silver\",\"where\":\"1=1\",\"ref_schema\":\"silver\",\"ref_table\":\"members\",\"ref_column\":\"member_id\",\"severity\":\"error\"}",
+        "value2": "",
+        "value_long": ""
+      },
+      {
+        "key1": "quality",
+        "key2": "claims:status:in_allowed_set",
+        "value1": "{\"schema\":\"silver\",\"where\":\"1=1\",\"allowed_list\":\"'OPEN','CLOSED','PENDING'\",\"severity\":\"error\"}",
+        "value2": "",
+        "value_long": ""
+      },
+      {
+        "key1": "quality",
+        "key2": "claims:amount:non_negative",
+        "value1": "{\"schema\":\"silver\",\"where\":\"1=1\",\"severity\":\"error\"}",
+        "value2": "",
+        "value_long": ""
+      },
+      {
+        "key1": "quality",
+        "key2": "claims:age:between_numeric",
+        "value1": "{\"schema\":\"silver\",\"where\":\"age IS NOT NULL\",\"min\":\"0\",\"max\":\"120\",\"severity\":\"error\"}",
+        "value2": "",
+        "value_long": ""
+      },
+      {
+        "key1": "quality",
+        "key2": "claims:diagnosis_code:max_length",
+        "value1": "{\"schema\":\"silver\",\"where\":\"1=1\",\"max_len\":\"10\",\"severity\":\"warn\"}",
+        "value2": "",
+        "value_long": ""
+      }
+    ]
+  }
+}
