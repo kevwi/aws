@@ -5,8 +5,8 @@ CREATE TABLE IF NOT EXISTS config_lookup (
     key2      VARCHAR(50),
     key3      VARCHAR(50),
     value1    VARCHAR(255) NOT NULL,
-    value2    VARCHAR(255),
-    value3    VARCHAR(255),
+    value2    VARCHAR(65535),
+    value3    VARCHAR(65535),
     disabled  BOOLEAN      NOT NULL DEFAULT FALSE,
     modified  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
