@@ -32,6 +32,19 @@ SORTKEY (jobid, created);
 
 ALTER TABLE pipe_log ADD PRIMARY KEY (id);
 
+CREATE OR REPLACE VIEW control.v_config AS
+SELECT
+  LOWER(TRIM(domain)) AS domain,
+  LOWER(TRIM(key1))   AS key1,
+  LOWER(TRIM(key2))   AS key2,
+  TRIM(value1)        AS value1,
+  TRIM(value2)        AS value2,
+  value3,
+  disabled,
+  created,
+  modified
+FROM control.config_lookup;
+
 CREATE TABLE IF NOT EXISTS config_context_sequence (
     domain     VARCHAR(255) NOT NULL,
     context    VARCHAR(50)  NOT NULL,
