@@ -455,3 +455,14 @@ EXCEPTION WHEN OTHERS THEN
   RAISE;
 END;
 $$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION control.alloc_jobid_pipeline()
+RETURNS INTEGER
+AS $$
+DECLARE
+  v_jobid INTEGER;
+BEGIN
+  CALL control.sp_alloc_jobid_pipeline(v_jobid);
+  RETURN v_jobid;
+END;
+$$ LANGUAGE plpgsql;
