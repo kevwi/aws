@@ -50,4 +50,5 @@ python demo_control_plane.py --run-quality --schema "${DEMO_SCHEMA}" --table "${
 echo "==> (Optional) Print sample config rows..."
 python demo_control_plane.py --print-config
 
+python demo_control_plane.py publish-file --file path/to/whatever.json --upsert
 echo "â Done."
