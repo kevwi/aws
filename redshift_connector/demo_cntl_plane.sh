@@ -3,27 +3,24 @@ set -euo pipefail
 
 # demo_control_plane.sh
 #
-# One-command demo driver for the Config & Rules Control Plane.
+# End-to-end demo driver.
 #
-# Prereqs:
-#   - python + pip
-#   - AWS credentials configured
-#   - Redshift DDL installed (control schema + procedures/views)
-#   - config_publish_json.py and demo_control_plane.py in the same folder
+# Expects:
+#   - config_publish_json.py and demo_control_plane.py in the same directory
 #
-# Usage:
-#   export CP_BUCKET=...
-#   export CP_PREFIX=config/demo
-#   export CP_CLUSTER_ID=...
-#   export CP_DATABASE=...
-#   export CP_DB_USER=...
-#   export CP_IAM_ROLE_ARN=...
+# Required env:
+#   CP_BUCKET, CP_PREFIX, CP_CLUSTER_ID, CP_DATABASE, CP_DB_USER, CP_IAM_ROLE_ARN
 #
+# Run:
 #   bash demo_control_plane.sh
 #
-# Optional:
-#   export DEMO_SCHEMA=silver
-#   export DEMO_TABLE=members
+# Demo steps:
+#   1) write sample JSON files
+#   2) publish samples (upsert)
+#   3) read config back
+#   4) write a pipeline log event
+#   5) read pipeline_log back
+#   6) (optional) run quality checks if proc exists
 
 : "${CP_BUCKET:?Set CP_BUCKET}"
 : "${CP_PREFIX:?Set CP_PREFIX}"
@@ -32,23 +29,31 @@ set -euo pipefail
 : "${CP_DB_USER:?Set CP_DB_USER}"
 : "${CP_IAM_ROLE_ARN:?Set CP_IAM_ROLE_ARN}"
 
+DEMO_OUTDIR="${DEMO_OUTDIR:-demo_configs}"
 DEMO_SCHEMA="${DEMO_SCHEMA:-silver}"
 DEMO_TABLE="${DEMO_TABLE:-members}"
 
 echo "==> Installing deps (boto3)..."
 python -m pip install --quiet --upgrade boto3
 
-echo "==> Writing demo JSON files..."
-python demo_control_plane.py --write-only
+echo "==> 1) Writing sample JSON files..."
+python demo_control_plane.py write-samples --outdir "${DEMO_OUTDIR}"
 
-echo "==> Publishing demo configs (upsert=true)..."
-python demo_control_plane.py --publish --upsert
+echo "==> 2) Publishing samples (upsert=true)..."
+python demo_control_plane.py publish-samples --outdir "${DEMO_OUTDIR}" --upsert
 
-echo "==> (Optional) Run quality checks: ${DEMO_SCHEMA}.${DEMO_TABLE}"
-python demo_control_plane.py --run-quality --schema "${DEMO_SCHEMA}" --table "${DEMO_TABLE}"
+echo "==> 3) Reading config back (shared)..."
+python demo_control_plane.py read-config --domain shared --limit 25
 
-echo "==> (Optional) Print sample config rows..."
-python demo_control_plane.py --print-config
+echo "==> 4) Writing a pipeline log event..."
+python demo_control_plane.py log-event --domain demo_app --app demo_ingest --status started --metal bronze --location "s3://example/demo/path"
 
-python demo_control_plane.py publish-file --file path/to/whatever.json --upsert
+echo "==> 5) Reading pipeline_log back (latest 10)..."
+python demo_control_plane.py read-pipeline-log --limit 10
+
+echo "==> 6) (Optional) Running quality checks (if installed): ${DEMO_SCHEMA}.${DEMO_TABLE}"
+set +e
+python demo_control_plane.py run-quality --schema "${DEMO_SCHEMA}" --table "${DEMO_TABLE}" --fail-on-error
+set -e
+
 echo "â Done."
