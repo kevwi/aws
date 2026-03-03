@@ -396,3 +396,25 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\nâ Demo failed: {e}\n", file=sys.stderr)
         raise
+
+"""
+sample for bronze
+
+cluster = "my-cluster"
+db = "dev"
+user = "etl_user"
+
+jobid = alloc_jobid(cluster, db, user)
+
+log_pipeline_event(
+    cluster, db, user,
+    domain="appname",
+    app="users",
+    status="started",
+    metal="bronze",
+    location="s3://bucket/path/file",
+    jobid=jobid
+)
+
+print("Allocated jobid:", jobid)
+"""
