@@ -213,11 +213,11 @@ $$ LANGUAGE plpgsql;
 -- 8) Smart pipeline logging
 --
 -- Resolves/allocates codes in config_lookup:
---   domain = p_domain (namespace, e.g. 'ffeo_task6b')
+--   domain = p_domain (namespace, e.g. 'common')
 --   key1 in ('process_name','metal_name','status')
 -- =========================================================
 CREATE OR REPLACE PROCEDURE control.sp_log_pipeline_event_smart(
-  IN  p_domain   VARCHAR,   -- namespace for codes (e.g. 'ffeo_task6b')
+  IN  p_domain   VARCHAR,   -- namespace for codes (e.g. 'common')
   IN  p_app      VARCHAR,   -- process_name
   IN  p_status   VARCHAR,   -- status name (e.g. 'success'|'failure'|'started')
   IN  p_metal    VARCHAR,   -- metal name (e.g. 'bronze'|'silver'|'gold')
